@@ -1,0 +1,19 @@
+# Ignorar entorno virtual
+.venv/
+__pycache__/
+*.pyc
+
+# Ignorar archivos del sistema
+.fseventsd/
+.DS_Store
+Thumbs.db
+
+# Ignorar archivos temporales de CircuitPython / M5Stack
+boot_out.txt
+.metadata_never_index
+.Trashes/
+.Trash-*
+System Volume Information/
+
+# Ignorar sincronizaciones automáticas (si usás una carpeta destino)
+AtomS3_Pulsera01/
