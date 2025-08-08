@@ -17,3 +17,5 @@ System Volume Information/
 
 # Ignorar sincronizaciones automáticas (si usás una carpeta destino)
 AtomS3_Pulsera01/
+# Ignorar archivo de configuración
+settings.toml

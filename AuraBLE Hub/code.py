@@ -1,41 +1,75 @@
 import time
+import json
+import os
+import socketpool
+import wifi
+import adafruit_minimqtt.adafruit_minimqtt as MQTT
+
 from adafruit_ble import BLERadio
 from adafruit_ble.advertising.standard import Advertisement
 
+# ===== Leer variables de entorno =====
+WIFI_SSID = os.getenv("WIFI_SSID")
+WIFI_PASS = os.getenv("WIFI_PASS")
+MQTT_BROKER = os.getenv("MQTT_BROKER")
+MQTT_PORT = int(os.getenv("MQTT_PORT"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC")
+
+# ===== BLE =====
 ble = BLERadio()
 
-print("🔍 Escaneando BLE...")
+DISPOSITIVOS_MONITOREADOS = {
+    "Pulsera01": {
+        "contador_estable": 0,
+        "umbral_rssi": -50,
+        "cerca": False,
+    }
+}
+LECTURAS_ESTABLES = 3
 
-device = None
-for adv in ble.start_scan(Advertisement, timeout=10):
-    if adv.complete_name and "Pulsera01" in adv.complete_name:
-        device = adv
-        print(f"📡 Detectado: {adv.complete_name}")
-        break
+# ===== Conexión WiFi ====  =s
+print("📡 Conectando a WiFi...")
+wifi.radio.connect(WIFI_SSID, WIFI_PASS)
+print("✅ Conectado a", WIFI_SSID)
 
-ble.stop_scan()
+# ===== MQTT =====
+pool = socketpool.SocketPool(wifi.radio)
+mqtt_client = MQTT.MQTT(
+    broker=MQTT_BROKER,
+    port=MQTT_PORT,
+    socket_pool=pool,
+    ssl_context=None
+)
+mqtt_client.connect()
+print("✅ MQTT conectado a", MQTT_BROKER)
+print("🔍 Escaneando continuamente...")
 
-if not device:
-    print("❌ Pulsera01 no encontrada.")
-else:
-    print("🔗 Conectando...")
-    try:
-        connection = ble.connect(device)
-        print("✅ Conectado.")
+while True:
+    for adv in ble.start_scan(Advertisement, timeout=1):
+        nombre = adv.complete_name or ""
+        rssi = adv.rssi
 
-        # 🧩 Servicios y características disponibles
-        for service in connection.remote_services:
-            print(f"🧩 Servicio UUID: {service.uuid}")
-            for char in service.characteristics:
-                try:
-                    val = char.read_value()
-                    decoded = val.decode("utf-8") if isinstance(val, bytes) else str(val)
-                    print(f"  ↳ Característica: {char.uuid} → {decoded}")
-                except Exception as e:
-                    print(f"  ↳ Característica: {char.uuid} → no legible: {e}")
+        if nombre in DISPOSITIVOS_MONITOREADOS:
+            dispositivo = DISPOSITIVOS_MONITOREADOS[nombre]
+            cerca_nuevo = rssi > dispositivo["umbral_rssi"]
 
-        connection.disconnect()
-        print("🔌 Desconectado.")
+            if cerca_nuevo != dispositivo["cerca"]:
+                dispositivo["contador_estable"] += 1
+                if dispositivo["contador_estable"] >= LECTURAS_ESTABLES:
+                    dispositivo["cerca"] = cerca_nuevo
+                    dispositivo["contador_estable"] = 0
+                    estado = "CERCA" if cerca_nuevo else "LEJOS"
+                    t = time.localtime()
+                    hora = "{:02}:{:02}:{:02}".format(t.tm_hour, t.tm_min, t.tm_sec)
+                    payload = {
+                        "dispositivo": "Pulsera01",  # antes era 'nombre'
+                        "evento": estado,           # antes era 'estado'
+                        "timestamp": hora
+                    }
+                    mqtt_client.publish(MQTT_TOPIC, json.dumps(payload))
+                    print(f"📤 Enviado MQTT: {payload}")
+            else:
+                dispositivo["contador_estable"] = 0
 
-    except Exception as e:
-        print(f"⚠️ Error: {e}")
+    ble.stop_scan()
+    time.sleep(0.2)
