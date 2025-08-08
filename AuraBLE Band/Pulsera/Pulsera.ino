@@ -1,52 +1,73 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
-#include <BLEServer.h>
+#include <BLEScan.h>
 
-#define SERVICE_UUID        "12345678-1234-5678-1234-56789abcdef0"
-#define CHARACTERISTIC_UUID "12345678-1234-5678-1234-56789abcdef1"
+// --- WiFi & MQTT ---
+const char* ssid = "Ap31";
+const char* password = "Mau*30420";
+const char* mqtt_server = "192.168.1.100"; // IP del Pi
+WiFiClient espClient;
+PubSubClient client(espClient);
 
-BLECharacteristic* pCharacteristic;
+// --- BLE ---
+BLEScan* pBLEScan;
+#define SCAN_TIME 1 // segundos
+
+// Dispositivo a vigilar
+String targetName = "Pulsera01";
+int umbralRSSI = -50;
+
+void setup_wifi() {
+  delay(10);
+  Serial.println("📡 Conectando WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ WiFi conectado");
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("🔄 Conectando MQTT...");
+    if (client.connect("NodoESP32")) {
+      Serial.println("✅ Conectado");
+    } else {
+      Serial.print("❌ Error: ");
+      Serial.println(client.state());
+      delay(2000);
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("🔧 Iniciando BLE...");
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
 
-  BLEDevice::init("Pulsera01");  // Nombre que aparece en escaneo
-  BLEServer* pServer = BLEDevice::createServer();
-
-  BLEService* pService = pServer->createService(SERVICE_UUID);
-
-  pCharacteristic = pService->createCharacteristic(
-    CHARACTERISTIC_UUID,
-    BLECharacteristic::PROPERTY_READ |
-    BLECharacteristic::PROPERTY_NOTIFY
-  );
-
-  pCharacteristic->setValue("PRUEBA123");
-  pService->start();
-
-  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  // Compatibilidad iOS
-  pAdvertising->setMinPreferred(0x12);
-
-  BLEDevice::startAdvertising();
-  Serial.println("📡 Pulsera01 anunciando PRUEBA123...");
+  BLEDevice::init("");
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setActiveScan(true);
 }
 
 void loop() {
-  static bool toggle = false;
-
-  if (toggle) {
-    pCharacteristic->setValue("valorA");
-  } else {
-    pCharacteristic->setValue("valorB");
+  if (!client.connected()) {
+    reconnect();
   }
-  toggle = !toggle;
+  client.loop();
 
-  pCharacteristic->notify();  // Envía valor si alguien está suscrito
-  Serial.println("📤 Notificación enviada.");
-
-  delay(5000);
+  BLEScanResults foundDevices = pBLEScan->start(SCAN_TIME, false);
+  for (int i = 0; i < foundDevices.getCount(); i++) {
+    BLEAdvertisedDevice device = foundDevices.getDevice(i);
+    if (device.haveName() && device.getName() == targetName) {
+      int rssi = device.getRSSI();
+      String estado = (rssi > umbralRSSI) ? "CERCA" : "LEJOS";
+      String payload = "{\"nombre\":\"" + targetName + "\",\"rssi\":" + String(rssi) + ",\"estado\":\"" + estado + "\"}";
+      client.publish("hogar/sensores", payload.c_str());
+      Serial.println("📤 MQTT: " + payload);
+    }
+  }
 }
